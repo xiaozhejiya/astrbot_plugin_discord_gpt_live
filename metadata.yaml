@@ -1,0 +1,13 @@
+name: astrbot_plugin_discord_gpt_live
+display_name: Discord GPT-Live
+desc: 在 Discord 语音频道持续听说，复用 AstrBot 模型配置、群聊人格与上下文，支持文字与语音同步及单频道单机器人限制。
+version: 0.1.0
+author: xiaozhejiya
+repo: https://github.com/xiaozhejiya/astrbot_plugin_discord_gpt_live
+astrbot_version: ">=4.22.1"
+support_platforms:
+  - discord
+tags:
+  - Discord
+  - 语音
+  - GPT-Live

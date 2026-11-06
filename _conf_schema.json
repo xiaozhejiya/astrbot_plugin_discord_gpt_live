@@ -1,0 +1,26 @@
+{
+  "voice_provider_id": {
+    "description": "语音模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "选择 AstrBot 中已配置的语音模型，复用其模型名、接口地址和 API Key。接口需支持 Live 双向语音协议；普通聊天或 TTS 模型不能直接使用。"
+  },
+  "voice": {
+    "description": "音色",
+    "type": "string",
+    "default": "marin"
+  },
+  "voice_style_extra": {
+    "description": "语音表达补充",
+    "type": "text",
+    "default": "",
+    "hint": "原有人格由群聊继承。这里只补充语速、倾听回应等语音风格。"
+  },
+  "respond_to_text_in_voice": {
+    "description": "文字频道消息触发语音回应",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时文字仍同步到上下文，语音主动问起时可以引用。此设置由模型指令控制。"
+  }
+}

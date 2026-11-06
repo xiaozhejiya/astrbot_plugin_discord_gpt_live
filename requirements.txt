@@ -1,0 +1,7 @@
+# Pin the upstream receive-side DAVE correction until a stable release includes it.
+py-cord[voice] @ git+https://github.com/Pycord-Development/pycord@10a5e8cf13bd8db21f95baf62cf866056d1e1091
+# This Pycord revision uses the pre-0.2 automatic DAVE key transitions.
+davey==0.1.7
+numpy>=1.26,<3
+soxr>=0.5,<2
+aiohttp>=3.13.2,<4
