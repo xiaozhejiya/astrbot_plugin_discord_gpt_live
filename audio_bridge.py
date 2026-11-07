@@ -92,6 +92,7 @@ class DiscordAudioBridge:
         self.error: str | None = None
         self.members: dict[int, dict[int, np.ndarray]] = {}
         self.member_timebase: dict[int, tuple[int, int]] = {}
+        self.member_last_timestamp: dict[int, int] = {}
         self.member_pending: dict[int, bytearray] = {}
         self.member_next: dict[int, int] = {}
         self.read_index = 0
@@ -108,6 +109,11 @@ class DiscordAudioBridge:
         self.counters = {
             "received_frames": 0,
             "input_dropped_frames": 0,
+            "input_late_frames": 0,
+            "input_future_frames": 0,
+            "input_duplicate_frames": 0,
+            "input_resyncs": 0,
+            "input_mixed_frames": 0,
             "output_underruns": 0,
             "played_frames": 0,
             "output_generated_bytes": 0,
@@ -158,10 +164,29 @@ class DiscordAudioBridge:
                     user_id, (timestamp, arrival)
                 )
                 delta = (timestamp - base_stamp + (1 << 31)) % (1 << 32) - (1 << 31)
+                # Once reanchored, packets preceding that RTP boundary belong to
+                # the old playout timeline and must never be scheduled again.
+                if delta < 0:
+                    dropped = len(pending) // 3840
+                    self.counters["input_dropped_frames"] += dropped
+                    self.counters["input_late_frames"] += dropped
+                    pending.clear()
+                    return
                 index = base_index + delta // 960
-                if abs(index - arrival) > 50:
-                    self.member_timebase[user_id] = (timestamp, arrival)
-                    index = arrival
+                previous = self.member_last_timestamp.get(user_id)
+                forward = (
+                    previous is None
+                    or ((timestamp - previous + (1 << 31)) % (1 << 32) - (1 << 31)) > 0
+                )
+                # A route-delay change or resumed talkspurt can shift all later RTP
+                # packets behind playout. Reanchor fresh packets instead of muting
+                # the speaker indefinitely; old/duplicate packets cannot move it.
+                if forward:
+                    self.member_last_timestamp[user_id] = timestamp
+                    if index < self.read_index or abs(index - arrival) > 50:
+                        index = max(arrival, self.read_index + 3)
+                        self.member_timebase[user_id] = (timestamp, index)
+                        self.counters["input_resyncs"] += 1
             while len(pending) >= 3840:
                 frame = bytes(pending[:3840])
                 del pending[:3840]
@@ -172,6 +197,12 @@ class DiscordAudioBridge:
                     or index in queue
                 ):
                     self.counters["input_dropped_frames"] += 1
+                    if index < self.read_index:
+                        self.counters["input_late_frames"] += 1
+                    elif index >= self.read_index + 50:
+                        self.counters["input_future_frames"] += 1
+                    elif index in queue:
+                        self.counters["input_duplicate_frames"] += 1
                     index += 1
                     continue
                 samples = np.frombuffer(frame, dtype="<i2").reshape(-1, 2)
@@ -194,9 +225,11 @@ class DiscordAudioBridge:
                 for expired in [position for position in queue if position < index]:
                     del queue[expired]
                     self.counters["input_dropped_frames"] += 1
+                    self.counters["input_late_frames"] += 1
                 samples = queue.pop(index, None)
                 if samples is not None:
                     mixed += samples
+                    self.counters["input_mixed_frames"] += 1
             self.read_index = index + 1
             # Leave filter headroom; clip again after resampling.
             np.clip(mixed, -32768, 32767, out=mixed)
@@ -242,6 +275,7 @@ class DiscordAudioBridge:
             self.member_pending.pop(user_id, None)
             self.member_next.pop(user_id, None)
             self.member_timebase.pop(user_id, None)
+            self.member_last_timestamp.pop(user_id, None)
 
     def close(self) -> None:
         """Release buffers and make late callbacks harmless."""
@@ -251,6 +285,7 @@ class DiscordAudioBridge:
             self.member_pending.clear()
             self.member_next.clear()
             self.member_timebase.clear()
+            self.member_last_timestamp.clear()
             self.counters["output_discarded_bytes"] += len(self.output)
             self.output.clear()
             self.output_pending.clear()

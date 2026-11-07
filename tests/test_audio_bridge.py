@@ -135,3 +135,46 @@ def test_first_input_read_aligns_after_live_connection_startup():
     now[0] = 5.0
     bridge.read_input()
     assert bridge.read_index == 251
+
+
+def test_input_recovers_when_network_delay_outgrows_initial_jitter_window():
+    now = [0.0]
+    bridge = DiscordAudioBridge(99, clock=lambda: now[0])
+    output = []
+    for tick in range(160):
+        now[0] = tick * 0.02
+        if tick < 20:
+            bridge.write_member(1, pcm(5000), timestamp=tick * 960)
+        elif tick >= 30:
+            # A 200 ms network-delay increase must not mute all later speech.
+            bridge.write_member(1, pcm(5000), timestamp=(tick - 10) * 960)
+        output.append(bridge.read_input())
+    samples = np.frombuffer(b"".join(output[-50:]), dtype="<i2")
+    assert np.mean(np.abs(samples)) > 4000
+    assert bridge.stats["received_frames"] >= 140
+
+
+def test_old_duplicate_after_playout_does_not_restart_member_timeline():
+    now = [0.0]
+    bridge = DiscordAudioBridge(99, clock=lambda: now[0])
+    for tick in range(100):
+        now[0] = tick * 0.02
+        bridge.write_member(1, pcm(1000), timestamp=tick * 960)
+        bridge.read_input()
+    count = bridge.stats["received_frames"]
+    bridge.write_member(1, pcm(1000), timestamp=0)
+    assert bridge.stats["received_frames"] == count
+
+
+def test_reanchoring_does_not_replay_a_previously_played_neighbor_packet():
+    now = [0.0]
+    bridge = DiscordAudioBridge(99, clock=lambda: now[0])
+    for tick in range(31):
+        now[0] = tick * 0.02
+        if tick < 20:
+            bridge.write_member(1, pcm(1000), timestamp=tick * 960)
+        bridge.read_input()
+    bridge.write_member(1, pcm(1000), timestamp=20 * 960)
+    count = bridge.stats["received_frames"]
+    bridge.write_member(1, pcm(1000), timestamp=19 * 960)
+    assert bridge.stats["received_frames"] == count

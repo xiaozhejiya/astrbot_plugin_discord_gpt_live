@@ -135,7 +135,14 @@ class AstrBotBridge:
         self.respond_to_text = False
 
     async def initialize(self, extra: str) -> tuple[str, list[dict]]:
-        """Load the original conversation and a bounded Live history snapshot."""
+        """Load the persona and untrimmed history before the final startup snapshot.
+
+        Args:
+            extra: Additional voice delivery instructions.
+
+        Returns:
+            Voice instructions and full stored history for one final snapshot.
+        """
         from astrbot.core.utils.session_lock import session_lock_manager
 
         self.recent_voice.clear()
@@ -168,7 +175,7 @@ class AstrBotBridge:
             )
         persona_text = persona.get("prompt", "") if persona else ""
         self.persona_fingerprint = hashlib.sha256(persona_text.encode()).hexdigest()
-        return voice_rules(persona_text, extra), self.snapshot(history)
+        return voice_rules(persona_text, extra), history
 
     def snapshot(self, history: list[dict]) -> list[dict]:
         """Apply current revisions and bound the Live startup history.
@@ -182,7 +189,7 @@ class AstrBotBridge:
         selected = []
         # UTF-8 bytes conservatively bound tokens while leaving room for role framing.
         budget = 6000
-        history = self.sync.project_history(history)
+        history = self.sync.project_history(history, include_observed=True)
         serialized = json.dumps(history, ensure_ascii=False)
         history.extend(
             message
@@ -202,6 +209,15 @@ class AstrBotBridge:
                 content, str
             ):
                 continue
+            match = re.search(r"\[discord-text:(\d+)\]\s*$", content)
+            task = self.sync.text_tasks.get(match[1]) if match else None
+            if task:
+                content = (
+                    content[: match.start()]
+                    + f"[Text task: {task['state']}; source_revision: "
+                    + f"{task.get('source_revision', 0)}]\n"
+                    + match[0]
+                )
             content = content.encode("utf-8")[-budget:].decode("utf-8", errors="ignore")
             if not content:
                 continue
@@ -215,7 +231,9 @@ class AstrBotBridge:
             for message in selected
             if (match := re.search(r"\[discord-text:(\d+)\]\s*$", message["content"]))
         }
-        self.sync.replay_text(exclude_ids=snapshot_ids)
+        # Restored messages belong to startup history, never the new-activity queue.
+        self.sync.text_queue.clear()
+        self.sync.snapshot_ids = snapshot_ids | set(self.sync.text_records)
         return selected
 
     async def binding_changed(self) -> bool:

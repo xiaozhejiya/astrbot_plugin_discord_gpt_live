@@ -100,7 +100,12 @@ class LiveSession:
                         "model": self.model,
                         "instructions": self.instructions
                         + "\n"
-                        + (TEXT_ON if self.respond_to_text else TEXT_OFF),
+                        + (TEXT_ON if self.respond_to_text else TEXT_OFF)
+                        + "\nInitial history predates this voice connection and is "
+                        "background context only. Do not read it aloud, summarize it, "
+                        "or resume old requests on joining. Wait for fresh voice input "
+                        "or an eligible new text message before responding. "
+                        "Previously delivered assistant replies are not pending speech.",
                         "input": [
                             {
                                 "role": message["role"],

@@ -194,7 +194,8 @@ async def test_initial_history_bounds_include_recovery_records(
         adapter.sync.add_voice(
             "previous", str(index), "user", content, index, index + 1
         )
-    _, history = await adapter.initialize("")
+    _, raw_history = await adapter.initialize("")
+    history = adapter.snapshot(raw_history)
     assert 0 < len(history) <= 128
     assert sum(len(item["content"].encode("utf-8")) for item in history) <= 6000
     assert history[-1]["content"].endswith(content[-10:])
@@ -283,3 +284,68 @@ async def test_backend_uses_available_transcript_and_reports_later_changes(
         assert "Aurora" in result
         if scenario == "correction":
             assert "newer" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_rejoin_seeds_saved_text_without_replaying_it_as_new_activity(tmp_path):
+    from discord_gpt_live.astrbot_bridge import AstrBotBridge
+    from discord_gpt_live.context_sync import ContextSync
+
+    path = tmp_path / "pending.json"
+    old = ContextSync("group", "cid", path)
+    old.add_text("123", "Alice", "Earlier question")
+    old.add_text("124", "Bot", "Already delivered answer", answered=True)
+    old.set_text_task("123", "processing", "attempt")
+    old.set_text_task("123", "completed", "attempt")
+    await old.checkpoint()
+    adapter = AstrBotBridge(None, SimpleNamespace(unified_msg_origin="group"), tmp_path)
+    adapter.sync = ContextSync("group", "cid", path)
+    history = adapter.snapshot([])
+    assert adapter.sync.next_text_chunk() is None
+    assert "Earlier question" in str(history)
+    assert "Already delivered answer" in str(history)
+    assert "completed" in str(history)
+    assert adapter.snapshot(history) == history
+    adapter.sync.add_text("125", "Alice", "A new question after joining")
+    assert "A new question after joining" in adapter.sync.next_text_chunk()[1]
+
+
+@pytest.mark.asyncio
+async def test_initialization_retains_full_history_until_final_startup_snapshot(
+    tmp_path,
+):
+    from unittest.mock import AsyncMock
+    from discord_gpt_live.astrbot_bridge import AstrBotBridge
+    from discord_gpt_live.context_sync import ContextSync
+
+    adapter = AstrBotBridge(
+        SimpleNamespace(
+            conversation_manager=SimpleNamespace(
+                get_curr_conversation_id=AsyncMock(return_value="cid"),
+                get_conversation=AsyncMock(
+                    return_value=SimpleNamespace(
+                        cid="cid", persona_id=None, history="[]"
+                    )
+                ),
+            ),
+            persona_manager=SimpleNamespace(
+                resolve_selected_persona=AsyncMock(
+                    return_value=(None, None, None, False)
+                )
+            ),
+            get_config=lambda **kwargs: {},
+        ),
+        SimpleNamespace(
+            unified_msg_origin="group", get_platform_name=lambda: "discord"
+        ),
+        tmp_path,
+    )
+    adapter.sync = ContextSync("group", "cid", tmp_path / "pending.json")
+    for index in range(1, 5):
+        adapter.sync.add_text(str(index), "Alice", str(index) * 2900)
+    _, raw_history = await adapter.initialize("")
+    assert raw_history == []  # Merge the journal and enforce budgets only once.
+    final = adapter.snapshot(raw_history)
+    ids = [item["content"].split("[discord-text:")[-1].split("]")[0] for item in final]
+    assert ids == ["2", "3", "4"]
+    assert adapter.sync.next_text_chunk() is None
